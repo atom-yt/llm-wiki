@@ -3,6 +3,7 @@ import {
   Card, Input, Button, Checkbox, Space, Spin, Tag, Typography, Empty, Divider,
 } from 'antd'
 import { SendOutlined, SaveOutlined } from '@ant-design/icons'
+import { useTranslation } from 'react-i18next'
 import { queryWiki, type QueryResponse } from '../services/api'
 import MarkdownViewer from '../components/MarkdownViewer'
 import { useNavigate } from 'react-router-dom'
@@ -11,6 +12,7 @@ const { TextArea } = Input
 const { Text } = Typography
 
 export default function QueryPage() {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [question, setQuestion] = useState('')
   const [save, setSave] = useState(false)
@@ -27,7 +29,7 @@ export default function QueryPage() {
       const res = await queryWiki(question.trim(), save)
       setResult(res)
     } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Query failed. Make sure the backend is running and LLM is configured.')
+      setError(err?.response?.data?.detail || t('query.queryFailed'))
     } finally {
       setLoading(false)
     }
@@ -41,10 +43,10 @@ export default function QueryPage() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Card title="Ask a Question">
+      <Card title={t('query.askQuestion')}>
         <TextArea
           rows={3}
-          placeholder="e.g. How do I upgrade the K8s cluster from 1.27 to 1.28?"
+          placeholder={t('query.placeholder')}
           value={question}
           onChange={e => setQuestion(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -58,23 +60,23 @@ export default function QueryPage() {
             onClick={handleQuery}
             disabled={!question.trim()}
           >
-            Query
+            {t('query.query')}
           </Button>
           <Checkbox checked={save} onChange={e => setSave(e.target.checked)} disabled={loading}>
             <Space>
               <SaveOutlined />
-              Save answer as wiki page
+              {t('query.saveAnswer')}
             </Space>
           </Checkbox>
         </div>
         <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
-          Press Ctrl+Enter / Cmd+Enter to submit
+          {t('query.submitHint')}
         </Text>
       </Card>
 
       {loading && (
         <Card>
-          <Spin tip="Querying LLM... This may take a moment.">
+          <Spin tip={t('query.querying')}>
             <div style={{ padding: 40 }} />
           </Spin>
         </Card>
@@ -87,10 +89,10 @@ export default function QueryPage() {
       )}
 
       {result && (
-        <Card title="Answer">
+        <Card title={t('query.answer')}>
           {result.selected_pages.length > 0 && (
             <>
-              <Text type="secondary">Referenced pages: </Text>
+              <Text type="secondary">{t('query.referencedPages')}: </Text>
               {result.selected_pages.map(p => (
                 <Tag
                   key={p}
@@ -114,7 +116,7 @@ export default function QueryPage() {
             <>
               <Divider />
               <Text type="success">
-                Archived as: <Tag color="green">{result.archived_as}</Tag>
+                {t('query.archivedAs')}: <Tag color="green">{result.archived_as}</Tag>
               </Text>
             </>
           )}
@@ -122,7 +124,7 @@ export default function QueryPage() {
       )}
 
       {!loading && !result && !error && (
-        <Empty description="Ask a question about your knowledge base" style={{ marginTop: 40 }} />
+        <Empty description={t('query.askQuestionHint')} style={{ marginTop: 40 }} />
       )}
     </Space>
   )

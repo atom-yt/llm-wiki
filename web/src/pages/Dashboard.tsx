@@ -8,9 +8,11 @@ import {
   ToolOutlined,
   WarningOutlined,
 } from '@ant-design/icons'
+import { useTranslation } from 'react-i18next'
 import { fetchPages, fetchLog, type PageInfo } from '../services/api'
 
 export default function Dashboard() {
+  const { t } = useTranslation()
   const [pages, setPages] = useState<PageInfo[]>([])
   const [logContent, setLogContent] = useState('')
   const [loading, setLoading] = useState(true)
@@ -57,39 +59,39 @@ export default function Dashboard() {
       <Row gutter={[16, 16]}>
         <Col xs={12} sm={8} md={4}>
           <Card hoverable onClick={() => navigate('/wiki')}>
-            <Statistic title="Total Pages" value={pages.length} prefix={<BookOutlined />} />
+            <Statistic title={t('dashboard.totalPages')} value={pages.length} prefix={<BookOutlined />} />
           </Card>
         </Col>
         <Col xs={12} sm={8} md={4}>
           <Card hoverable onClick={() => navigate('/wiki')}>
-            <Statistic title="Sources" value={counts.sources} prefix={<FileTextOutlined />} />
+            <Statistic title={t('dashboard.sources')} value={counts.sources} prefix={<FileTextOutlined />} />
           </Card>
         </Col>
         <Col xs={12} sm={8} md={4}>
           <Card hoverable onClick={() => navigate('/wiki')}>
-            <Statistic title="Entities" value={counts.entities} prefix={<ToolOutlined />} />
+            <Statistic title={t('dashboard.entities')} value={counts.entities} prefix={<ToolOutlined />} />
           </Card>
         </Col>
         <Col xs={12} sm={8} md={4}>
           <Card hoverable onClick={() => navigate('/wiki')}>
-            <Statistic title="Concepts" value={counts.concepts} prefix={<BulbOutlined />} />
+            <Statistic title={t('dashboard.concepts')} value={counts.concepts} prefix={<BulbOutlined />} />
           </Card>
         </Col>
         <Col xs={12} sm={8} md={4}>
           <Card hoverable onClick={() => navigate('/wiki')}>
-            <Statistic title="Procedures" value={counts.procedures} prefix={<WarningOutlined />} />
+            <Statistic title={t('dashboard.procedures')} value={counts.procedures} prefix={<WarningOutlined />} />
           </Card>
         </Col>
         <Col xs={12} sm={8} md={4}>
           <Card hoverable onClick={() => navigate('/wiki')}>
-            <Statistic title="Queries" value={counts.queries} prefix={<FileTextOutlined />} />
+            <Statistic title={t('dashboard.queries')} value={counts.queries} prefix={<FileTextOutlined />} />
           </Card>
         </Col>
       </Row>
 
-      <Card title="Recent Activity" style={{ marginTop: 16 }}>
+      <Card title={t('dashboard.recentActivity')} style={{ marginTop: 16 }}>
         {logEntries.length === 0 ? (
-          <Empty description="No activity yet. Start by ingesting a source file." />
+          <Empty description={t('dashboard.noActivity')} />
         ) : (
           <List
             size="small"
@@ -99,7 +101,7 @@ export default function Dashboard() {
               const action = actionMatch ? actionMatch[1] : ''
               return (
                 <List.Item>
-                  <Tag color={tagColor(action)}>{action || 'log'}</Tag>
+                  <Tag color={tagColor(action)}>{action || t('dashboard.log')}</Tag>
                   {item}
                 </List.Item>
               )

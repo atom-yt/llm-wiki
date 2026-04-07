@@ -1,19 +1,22 @@
 import { useState } from 'react'
 import {
-  Card, Button, Checkbox, Space, Spin, List, Tag, Typography, Empty, Result, Divider,
+  Card, Button, Checkbox, Space, Spin, List, Tag, Typography, Empty, Result,
 } from 'antd'
 import {
   SafetyCertificateOutlined, BugOutlined, RobotOutlined, ToolOutlined,
 } from '@ant-design/icons'
+import { useTranslation } from 'react-i18next'
 import { lintWiki, type LintResponse, type LintIssue } from '../services/api'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 
 function IssueList({ issues, title, icon }: { issues: LintIssue[]; title: string; icon: React.ReactNode }) {
+  const { t } = useTranslation()
+
   if (issues.length === 0) {
     return (
       <Card size="small" title={<Space>{icon}{title}</Space>} style={{ marginBottom: 16 }}>
-        <Text type="success">No issues found</Text>
+        <Text type="success">{t('lint.noIssuesFound')}</Text>
       </Card>
     )
   }
@@ -48,6 +51,7 @@ function IssueList({ issues, title, icon }: { issues: LintIssue[]; title: string
 }
 
 export default function LintPage() {
+  const { t } = useTranslation()
   const [fix, setFix] = useState(false)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<LintResponse | null>(null)
@@ -61,7 +65,7 @@ export default function LintPage() {
       const res = await lintWiki(fix)
       setResult(res)
     } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Lint failed. Make sure the backend is running and LLM is configured.')
+      setError(err?.response?.data?.detail || t('lint.lintFailed'))
     } finally {
       setLoading(false)
     }
@@ -77,7 +81,7 @@ export default function LintPage() {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <Card title="Wiki Health Check">
+      <Card title={t('lint.wikiHealthCheck')}>
         <Space>
           <Button
             type="primary"
@@ -85,26 +89,26 @@ export default function LintPage() {
             loading={loading}
             onClick={handleLint}
           >
-            Run Health Check
+            {t('lint.runHealthCheck')}
           </Button>
           <Checkbox checked={fix} onChange={e => setFix(e.target.checked)} disabled={loading}>
             <Space>
               <ToolOutlined />
-              Auto-fix issues
+              {t('lint.autoFixIssues')}
             </Space>
           </Checkbox>
         </Space>
         <div style={{ marginTop: 8 }}>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            Checks for orphan pages, broken links, thin pages, contradictions, and missing references.
-            {fix ? ' Auto-fix will ask the LLM to generate corrections.' : ''}
+            {t('lint.checkHint')}
+            {fix ? ` ${t('lint.autoFixHint')}` : ''}
           </Text>
         </div>
       </Card>
 
       {loading && (
         <Card>
-          <Spin tip="Running health check... LLM analysis may take a moment.">
+          <Spin tip={t('lint.runningCheck')}>
             <div style={{ padding: 40 }} />
           </Spin>
         </Card>
@@ -121,34 +125,34 @@ export default function LintPage() {
           {totalIssues === 0 ? (
             <Result
               status="success"
-              title="Wiki is healthy"
-              subTitle="No structural or content issues found."
+              title={t('lint.wikiHealthy')}
+              subTitle={t('lint.wikiHealthySub')}
             />
           ) : (
             <Result
               status="warning"
-              title={`Found ${totalIssues} issue${totalIssues > 1 ? 's' : ''}`}
-              subTitle={fixCount > 0 ? `Applied ${fixCount} fixes` : undefined}
+              title={t('lint.foundIssues', { count: totalIssues })}
+              subTitle={fixCount > 0 ? t('lint.appliedFixes', { count: fixCount }) : undefined}
             />
           )}
 
           <IssueList
             issues={result.structural_issues}
-            title="Structural Issues"
+            title={t('lint.structuralIssues')}
             icon={<BugOutlined />}
           />
 
           <IssueList
             issues={result.llm_issues}
-            title="LLM Analysis"
+            title={t('lint.llmAnalysis')}
             icon={<RobotOutlined />}
           />
 
           {fixCount > 0 && (
-            <Card title="Applied Fixes" size="small">
+            <Card title={t('lint.appliedFixesTitle')} size="small">
               {result.fixes.created && result.fixes.created.length > 0 && (
                 <div style={{ marginBottom: 8 }}>
-                  <Text strong>Created: </Text>
+                  <Text strong>{t('ingest.created')}: </Text>
                   {result.fixes.created.map(p => (
                     <Tag color="green" key={p}>{p}</Tag>
                   ))}
@@ -156,7 +160,7 @@ export default function LintPage() {
               )}
               {result.fixes.updated && result.fixes.updated.length > 0 && (
                 <div>
-                  <Text strong>Updated: </Text>
+                  <Text strong>{t('ingest.updated')}: </Text>
                   {result.fixes.updated.map(p => (
                     <Tag color="blue" key={p}>{p}</Tag>
                   ))}
@@ -168,7 +172,7 @@ export default function LintPage() {
       )}
 
       {!loading && !result && !error && (
-        <Empty description="Click the button above to check wiki health" style={{ marginTop: 40 }} />
+        <Empty description={t('lint.clickToCheck')} style={{ marginTop: 40 }} />
       )}
     </Space>
   )

@@ -9,25 +9,27 @@ import {
   WarningOutlined,
   SearchOutlined,
 } from '@ant-design/icons'
+import { useTranslation } from 'react-i18next'
 import { fetchPages, fetchPage, type PageInfo } from '../services/api'
 import MarkdownViewer from '../components/MarkdownViewer'
 
 const { Sider, Content } = Layout
 const { Search } = Input
 
-const TYPE_CONFIG: Record<string, { label: string; prefix: string; icon: React.ReactNode }> = {
-  sources: { label: 'Sources', prefix: 'source-', icon: <FileTextOutlined /> },
-  entities: { label: 'Entities', prefix: 'entity-', icon: <ApartmentOutlined /> },
-  concepts: { label: 'Concepts', prefix: 'concept-', icon: <BulbOutlined /> },
-  procedures: { label: 'Procedures', prefix: 'procedure-', icon: <ToolOutlined /> },
-  incidents: { label: 'Incidents', prefix: 'incident-', icon: <WarningOutlined /> },
-  queries: { label: 'Queries', prefix: 'query-', icon: <SearchOutlined /> },
-}
-
 export default function WikiBrowser() {
+  const { t } = useTranslation()
   const { pageName } = useParams<{ pageName?: string }>()
   const navigate = useNavigate()
   const { token } = theme.useToken()
+
+  const TYPE_CONFIG: Record<string, { label: string; prefix: string; icon: React.ReactNode }> = {
+    sources: { label: t('wikiBrowser.sources'), prefix: 'source-', icon: <FileTextOutlined /> },
+    entities: { label: t('wikiBrowser.entities'), prefix: 'entity-', icon: <ApartmentOutlined /> },
+    concepts: { label: t('wikiBrowser.concepts'), prefix: 'concept-', icon: <BulbOutlined /> },
+    procedures: { label: t('wikiBrowser.procedures'), prefix: 'procedure-', icon: <ToolOutlined /> },
+    incidents: { label: t('wikiBrowser.incidents'), prefix: 'incident-', icon: <WarningOutlined /> },
+    queries: { label: t('wikiBrowser.queries'), prefix: 'query-', icon: <SearchOutlined /> },
+  }
 
   const [pages, setPages] = useState<PageInfo[]>([])
   const [content, setContent] = useState('')
@@ -96,7 +98,7 @@ export default function WikiBrowser() {
       items.push({
         key: '_other',
         icon: <FileTextOutlined />,
-        label: `Other (${grouped.other.length})`,
+        label: `${t('wikiBrowser.other')} (${grouped.other.length})`,
         children: grouped.other.map(p => ({
           key: p.name,
           label: p.title || p.name,
@@ -132,7 +134,7 @@ export default function WikiBrowser() {
       >
         <div style={{ padding: '12px 12px 0' }}>
           <Search
-            placeholder="Filter pages..."
+            placeholder={t('wikiBrowser.filterPages')}
             allowClear
             size="small"
             value={search}
@@ -141,7 +143,7 @@ export default function WikiBrowser() {
         </div>
         {menuItems.length === 0 ? (
           <Empty
-            description="No wiki pages"
+            description={t('wikiBrowser.noWikiPages')}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             style={{ marginTop: 40 }}
           />
@@ -170,7 +172,7 @@ export default function WikiBrowser() {
           )
         ) : (
           <Empty
-            description="Select a page from the sidebar"
+            description={t('wikiBrowser.selectPage')}
             style={{ marginTop: 80 }}
           />
         )}

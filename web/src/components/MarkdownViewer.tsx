@@ -1,14 +1,13 @@
 import ReactMarkdown from 'react-markdown'
-import { Typography } from 'antd'
 
 interface Props {
   content: string
   onLinkClick?: (pageName: string) => void
 }
 
-export default function MarkdownViewer({ content, onLinkClick }: Props) {
+export default function MarkdownViewer({ onLinkClick }: Props) {
   return (
-    <Typography>
+    <div className="markdown-viewer">
       <ReactMarkdown
         components={{
           a: ({ href, children }) => {
@@ -18,6 +17,7 @@ export default function MarkdownViewer({ content, onLinkClick }: Props) {
               return (
                 <a
                   href="#"
+                  className="wiki-link"
                   onClick={(e) => {
                     e.preventDefault()
                     onLinkClick(pageName)
@@ -27,40 +27,45 @@ export default function MarkdownViewer({ content, onLinkClick }: Props) {
                 </a>
               )
             }
-            return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+            return <a href={href} target="_blank" rel="noopener noreferrer" className="external-link">{children}</a>
           },
-          h1: ({ children }) => <Typography.Title level={3}>{children}</Typography.Title>,
-          h2: ({ children }) => <Typography.Title level={4}>{children}</Typography.Title>,
-          h3: ({ children }) => <Typography.Title level={5}>{children}</Typography.Title>,
-          p: ({ children }) => <Typography.Paragraph>{children}</Typography.Paragraph>,
+          h1: ({ children }) => <h1>{children}</h1>,
+          h2: ({ children }) => <h2>{children}</h2>,
+          h3: ({ children }) => <h3>{children}</h3>,
+          h4: ({ children }) => <h4>{children}</h4>,
+          h5: ({ children }) => <h5>{children}</h5>,
+          h6: ({ children }) => <h6>{children}</h6>,
+          p: ({ children }) => <p>{children}</p>,
+          ul: ({ children }) => <ul>{children}</ul>,
+          ol: ({ children }) => <ol>{children}</ol>,
+          li: ({ children }) => <li>{children}</li>,
+          blockquote: ({ children }) => (
+            <blockquote>{children}</blockquote>
+          ),
+          hr: () => <hr />,
+          table: ({ children }) => <div className="markdown-table-container"><table>{children}</table></div>,
+          thead: ({ children }) => <thead>{children}</thead>,
+          tbody: ({ children }) => <tbody>{children}</tbody>,
+          tr: ({ children }) => <tr>{children}</tr>,
+          th: ({ children }) => <th>{children}</th>,
+          td: ({ children }) => <td>{children}</td>,
           code: ({ className, children, ...props }) => {
             const isBlock = className?.startsWith('language-')
             if (isBlock) {
               return (
-                <pre style={{
-                  background: '#f5f5f5',
-                  padding: 16,
-                  borderRadius: 6,
-                  overflow: 'auto',
-                  fontSize: 13,
-                }}>
-                  <code>{children}</code>
+                <pre className="markdown-code-block">
+                  <code className={className}>{children}</code>
                 </pre>
               )
             }
             return (
-              <code style={{
-                background: '#f0f0f0',
-                padding: '2px 6px',
-                borderRadius: 4,
-                fontSize: 13,
-              }} {...props}>
+              <code className="markdown-code-inline" {...props}>
                 {children}
               </code>
             )
           },
         }}
       />
-    </Typography>
+    </div>
   )
 }
