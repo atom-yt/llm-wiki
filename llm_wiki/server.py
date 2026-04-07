@@ -66,6 +66,8 @@ class PageContent(BaseModel):
 # ── App factory ───────────────────────────────────────────────────
 
 def create_app(root_dir: str = ".") -> FastAPI:
+    # Support root from environment variable for uvicorn --factory mode
+    root_dir = os.environ.get("LLM_WIKI_ROOT", root_dir)
     app = FastAPI(title="LLM Wiki", version="0.1.0")
 
     app.add_middleware(

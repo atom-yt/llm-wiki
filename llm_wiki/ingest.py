@@ -9,51 +9,31 @@ from llm_wiki.wiki import WikiManager
 
 
 _INGEST_SYSTEM_PROMPT = """\
-You are a meticulous wiki maintainer. Your job is to process a raw source document \
-and produce structured wiki pages.
+You are a wiki maintainer. Process source doc to produce structured wiki pages.
 
-## Wiki schema
+## Schema
 {schema}
 
-## Current wiki index
+## Current index
 {index}
 
-## Instructions
-Given the source document below, you must:
-1. Identify the key points of the source.
-2. Create a summary page for the source (prefix: source-).
-3. Identify entities (tools, services, systems) and create/update entity pages (prefix: entity-).
-4. Identify concepts (ideas, patterns, principles) and create/update concept pages (prefix: concept-).
-5. Identify procedures (step-by-step guides) and create/update procedure pages (prefix: procedure-).
-6. Identify incidents (post-mortems) if any and create incident pages (prefix: incident-).
-7. Produce index entries for all new/updated pages.
-
-For pages that already exist in the index, you should merge new information into the \
-existing content. I will provide the existing content for those pages.
-
-## Existing pages content
+## Existing pages (recent 10)
 {existing_pages}
 
-## Output format
-Respond with a JSON object (no markdown code fences) containing:
+## Instructions
+1. Extract key points
+2. Create source-xxx.md summary
+3. Create/update entity-xxx.md, concept-xxx.md, procedure-xxx.md as needed
+4. Update index entries
+
+## Output JSON (no markdown)
 {{
-  "key_points": ["point 1", "point 2", ...],
+  "key_points": ["point1", "point2"],
   "pages": [
-    {{
-      "filename": "source-xxx.md",
-      "action": "create" or "update",
-      "content": "full markdown content of the page"
-    }},
-    ...
+    {{"filename": "source-xxx.md", "action": "create/update", "content": "markdown"}}
   ],
   "index_entries": [
-    {{
-      "section": "Sources" or "Entities" or "Concepts" or "Procedures" or "Incidents",
-      "filename": "source-xxx.md",
-      "display_name": "Source Xxx",
-      "summary": "one-line summary"
-    }},
-    ...
+    {{"section": "Sources/Entities/Concepts/Procedures", "filename": "source-xxx.md", "display_name": "Title", "summary": "one-line"}}
   ]
 }}
 """
@@ -71,21 +51,37 @@ def _slugify(text: str) -> str:
 def _build_existing_pages_context(
     wiki: WikiManager, index_text: str
 ) -> str:
-    """Read all existing wiki pages referenced in the index to give LLM context."""
+    """Read recent existing wiki pages to give LLM context (limit to avoid prompt overflow)."""
     pages = wiki.list_wiki_pages()
     if not pages:
         return "(no existing pages)"
 
+    # Only read the most recent 10 pages to keep prompt short
+    pages = pages[-10:]
+
+    # Use ThreadPoolExecutor to read pages in parallel
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     parts = []
-    for name in pages:
+
+    def read_page(name: str) -> tuple[str, str] | None:
         try:
             content = wiki.read_wiki_page(name)
-            # Truncate very long pages to save tokens
-            if len(content) > 2000:
-                content = content[:2000] + "\n...(truncated)"
-            parts.append(f"### {name}.md\n{content}")
+            # Truncate to 1000 chars (reduced from 2000)
+            if len(content) > 1000:
+                content = content[:1000] + "\n...(truncated)"
+            return (name, content)
         except FileNotFoundError:
-            continue
+            return None
+
+    # Read pages in parallel
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(read_page, name): name for name in pages}
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                name, content = result
+                parts.append(f"### {name}.md\n{content}")
 
     return "\n\n".join(parts) if parts else "(no existing pages)"
 
