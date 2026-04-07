@@ -4,7 +4,7 @@ import {
 } from 'antd'
 import { SendOutlined, SaveOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
-import { queryWiki, type QueryResponse } from '../services/api'
+import { queryWikiStream } from '../services/api'
 import MarkdownViewer from '../components/MarkdownViewer'
 import { useNavigate } from 'react-router-dom'
 
@@ -17,20 +17,44 @@ export default function QueryPage() {
   const [question, setQuestion] = useState('')
   const [save, setSave] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<QueryResponse | null>(null)
+  const [streamingStarted, setStreamingStarted] = useState(false)
+  const [selectedPages, setSelectedPages] = useState<string[]>([])
+  const [answer, setAnswer] = useState('')
+  const [archivedAs, setArchivedAs] = useState<string | null>(null)
   const [error, setError] = useState('')
 
   const handleQuery = async () => {
     if (!question.trim()) return
     setLoading(true)
+    setStreamingStarted(false)
     setError('')
-    setResult(null)
+    setSelectedPages([])
+    setAnswer('')
+    setArchivedAs(null)
+
     try {
-      const res = await queryWiki(question.trim(), save)
-      setResult(res)
+      await queryWikiStream(question.trim(), save, {
+        onSelectedPages: (pages) => {
+          setSelectedPages(pages)
+          setStreamingStarted(true)
+        },
+        onChunk: (chunk) => {
+          setAnswer(prev => prev + chunk)
+        },
+        onDone: (archivedAs) => {
+          if (archivedAs) {
+            setArchivedAs(archivedAs)
+          }
+          // Only set loading to false when done
+          setLoading(false)
+        },
+        onError: (error) => {
+          setError(error)
+          setLoading(false)
+        },
+      })
     } catch (err: any) {
-      setError(err?.response?.data?.detail || t('query.queryFailed'))
-    } finally {
+      setError(err?.message || t('query.queryFailed'))
       setLoading(false)
     }
   }
@@ -74,7 +98,7 @@ export default function QueryPage() {
         </Text>
       </Card>
 
-      {loading && (
+      {loading && !streamingStarted && (
         <Card>
           <Spin tip={t('query.querying')}>
             <div style={{ padding: 40 }} />
@@ -88,12 +112,12 @@ export default function QueryPage() {
         </Card>
       )}
 
-      {result && (
-        <Card title={t('query.answer')}>
-          {result.selected_pages.length > 0 && (
+      {(streamingStarted || selectedPages.length > 0) && (
+        <Card title={t('query.answer')} style={{ minHeight: 200 }}>
+          {selectedPages.length > 0 && (
             <>
               <Text type="secondary">{t('query.referencedPages')}: </Text>
-              {result.selected_pages.map(p => (
+              {selectedPages.map(p => (
                 <Tag
                   key={p}
                   color="blue"
@@ -108,22 +132,24 @@ export default function QueryPage() {
           )}
 
           <MarkdownViewer
-            content={result.answer}
+            content={answer}
             onLinkClick={name => navigate(`/wiki/${name}`)}
           />
 
-          {result.archived_as && (
+          {archivedAs && (
             <>
               <Divider />
               <Text type="success">
-                {t('query.archivedAs')}: <Tag color="green">{result.archived_as}</Tag>
+                {t('query.archivedAs')}: <Tag color="green">{archivedAs}</Tag>
               </Text>
             </>
           )}
+
+          {loading && <Spin size="small" style={{ marginTop: 16 }} />}
         </Card>
       )}
 
-      {!loading && !result && !error && (
+      {!loading && !answer && !error && selectedPages.length === 0 && (
         <Empty description={t('query.askQuestionHint')} style={{ marginTop: 40 }} />
       )}
     </Space>

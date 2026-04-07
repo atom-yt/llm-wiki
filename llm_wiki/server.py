@@ -1,11 +1,12 @@
 import os
 from pathlib import Path
 from typing import Optional
+import json
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from llm_wiki.config import get_config, ConfigError
@@ -74,11 +75,13 @@ def create_app(root_dir: str = ".") -> FastAPI:
         allow_headers=["*"],
     )
 
-    wiki = WikiManager(root_dir)
+    # Use absolute path for root_dir
+    root_path = Path(root_dir).resolve()
+    wiki = WikiManager(str(root_path))
 
     def _llm() -> LLMClient:
         try:
-            config = get_config(root_dir)
+            config = get_config(str(root_path))
         except ConfigError as e:
             raise HTTPException(status_code=500, detail=str(e))
         return LLMClient(config)
@@ -165,7 +168,7 @@ def create_app(root_dir: str = ".") -> FastAPI:
         select_messages = [
             {
                 "role": "system",
-                "content": _SELECT_PAGES_PROMPT.format(index=index_text),
+                "content": f"Return JSON: {{\"pages\": [\"filename.md\", ...]}}.\nSelect up to 5 most relevant pages for the query.\n\nAvailable: {', '.join(wiki.list_wiki_pages())}",
             },
             {"role": "user", "content": req.question},
         ]
@@ -242,6 +245,170 @@ def create_app(root_dir: str = ".") -> FastAPI:
             answer=answer,
             selected_pages=selected_pages,
             archived_as=archived_as,
+        )
+
+    @app.post("/api/query/stream")
+    async def query_stream(req: QueryRequest):
+        """Stream query response with Server-Sent Events."""
+        import asyncio
+        import functools
+        import json
+        import queue
+        import threading
+
+        llm = _llm()
+
+        from llm_wiki.query import (
+            _SELECT_PAGES_PROMPT,
+            _ANSWER_PROMPT,
+            _slugify,
+        )
+
+        # Get available pages for selection
+        all_pages = wiki.list_wiki_pages()
+        select_messages = [
+            {
+                "role": "system",
+                "content": f"Return JSON: {{\"pages\": [\"filename.md\", ...]}}.\nSelect up to 5 most relevant pages for the query.\n\nAvailable: {', '.join(all_pages)}",
+            },
+            {"role": "user", "content": req.question},
+        ]
+
+        # Helper to run blocking generator in thread and yield items
+        async def stream_from_blocking(gen_func):
+            """Run a blocking generator in a thread and yield items asynchronously."""
+            q = queue.Queue()
+            exc = [None]  # Use list to allow assignment in nested function
+
+            def run():
+                try:
+                    for item in gen_func():
+                        q.put(item)
+                    q.put(None)  # Sentinel for end of stream
+                except Exception as e:
+                    exc[0] = e
+                    q.put(None)
+
+            thread = threading.Thread(target=run, daemon=True)
+            thread.start()
+
+            loop = asyncio.get_event_loop()
+            while True:
+                # Wait for item from queue (non-blocking via executor)
+                item = await loop.run_in_executor(None, q.get)
+                if item is None:
+                    if exc[0]:
+                        raise exc[0]
+                    break
+                yield item
+
+        # Step 1: select pages in thread (non-blocking)
+        selection = await asyncio.to_thread(functools.partial(llm.chat_json, select_messages))
+        selected_pages = selection.get("pages", [])
+
+        async def event_generator():
+            # Send selected pages event first
+            selected_pages_json = json.dumps(selected_pages)
+            yield f"event: selected_pages\ndata: {selected_pages_json}\n\n"
+
+            if not selected_pages:
+                error_json = json.dumps({'error': 'No relevant pages found in wiki.'})
+                yield f"event: done\ndata: {error_json}\n\n"
+                return
+
+            # Step 2: read pages
+            parts = []
+            for pf in selected_pages:
+                pn = pf.replace(".md", "")
+                try:
+                    content = wiki.read_wiki_page(pn)
+                    parts.append(f"### {pf}\n{content}")
+                except FileNotFoundError:
+                    continue
+
+            if not parts:
+                error_json = json.dumps({'error': 'Could not read any of the selected pages.'})
+                yield f"event: done\ndata: {error_json}\n\n"
+                return
+
+            # Step 3: stream answer
+            answer_messages = [
+                {
+                    "role": "system",
+                    "content": _ANSWER_PROMPT.format(pages_content="\n\n".join(parts)),
+                },
+                {"role": "user", "content": req.question},
+            ]
+
+            archived_as = None
+            chunk_count = 0
+
+            if req.save:
+                # Collect full answer for archiving (stream to user and collect)
+                full_answer = ""
+                gen_func = functools.partial(llm.chat_stream, answer_messages)
+                async for chunk in stream_from_blocking(gen_func):
+                    chunk_count += 1
+                    full_answer += chunk
+                    chunk_json = json.dumps({'chunk': chunk})
+                    yield f"event: chunk\ndata: {chunk_json}\n\n"
+
+                answer = full_answer
+
+                slug = f"query-{_slugify(req.question)}"
+                page_content = (
+                    f'---\ntype: query\nquestion: "{req.question}"\n---\n\n'
+                    f"# {req.question}\n\n{answer}"
+                )
+                wiki.write_wiki_page(slug, page_content)
+
+                # Update index
+                idx_text = wiki.read_index()
+                section_header = "## Queries"
+                link_line = f"- [{slug}]({slug}.md) - {req.question[:80]}"
+                if section_header not in idx_text:
+                    idx_text += f"\n{section_header}\n{link_line}\n"
+                elif f"{slug}.md" not in idx_text:
+                    pos = idx_text.index(section_header) + len(section_header)
+                    nl = idx_text.index("\n", pos)
+                    idx_text = idx_text[: nl + 1] + link_line + "\n" + idx_text[nl + 1 :]
+                wiki.write_index(idx_text)
+
+                wiki.append_log(
+                    "query",
+                    req.question[:60],
+                    [
+                        f"Generated answer based on {len(selected_pages)} wiki pages",
+                        f"Archived as: {slug}.md",
+                    ],
+                )
+                archived_as = f"{slug}.md"
+            else:
+                # Just stream without archiving
+                gen_func = functools.partial(llm.chat_stream, answer_messages)
+                async for chunk in stream_from_blocking(gen_func):
+                    chunk_count += 1
+                    chunk_json = json.dumps({'chunk': chunk})
+                    yield f"event: chunk\ndata: {chunk_json}\n\n"
+
+                wiki.append_log(
+                    "query",
+                    req.question[:60],
+                    [f"Generated answer based on {len(selected_pages)} wiki pages"],
+                )
+
+            # Send done event
+            done_json = json.dumps({'archived_as': archived_as})
+            yield f"event: done\ndata: {done_json}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     # ── Lint ──────────────────────────────────────────────────

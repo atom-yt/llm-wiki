@@ -107,10 +107,16 @@ def lint(ctx, fix):
 def serve(ctx, port, host):
     """Start the web UI server"""
     import uvicorn
+    from pathlib import Path
 
     from llm_wiki.server import create_app
 
     root = ctx.obj["root"]
+
+    # Resolve root to absolute path relative to current working directory
+    root_path = Path(root).resolve()
+    root = str(root_path)
+
     app = create_app(root)
     click.echo(f"Starting LLM Wiki server at http://{host}:{port} (data: {root})")
     uvicorn.run(app, host=host, port=port)

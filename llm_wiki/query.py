@@ -1,5 +1,6 @@
 import json
 import re
+import sys
 from pathlib import Path
 
 import click
@@ -97,7 +98,7 @@ def run_query(
 
     pages_content = "\n\n".join(pages_content_parts)
 
-    # Step 3: generate answer
+    # Step 3: generate answer with streaming
     answer_messages = [
         {
             "role": "system",
@@ -105,10 +106,20 @@ def run_query(
         },
         {"role": "user", "content": question},
     ]
-    answer = llm.chat(answer_messages)
 
     click.echo("")
-    click.echo(answer)
+    click.echo("Generating answer...", nl=False)
+
+    # Stream the answer
+    answer_chunks = []
+    for chunk in llm.chat_stream(answer_messages):
+        click.echo(chunk, nl=False)
+        answer_chunks.append(chunk)
+        sys.stdout.flush()
+
+    click.echo()  # New line after streaming
+
+    answer = "".join(answer_chunks)
 
     # Step 4: optionally archive
     if save:

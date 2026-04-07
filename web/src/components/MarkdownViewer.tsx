@@ -5,10 +5,11 @@ interface Props {
   onLinkClick?: (pageName: string) => void
 }
 
-export default function MarkdownViewer({ onLinkClick }: Props) {
+export default function MarkdownViewer({ content, onLinkClick }: Props) {
   return (
     <div className="markdown-viewer">
       <ReactMarkdown
+        children={content}
         components={{
           a: ({ href, children }) => {
             // Intercept wiki page links (*.md)

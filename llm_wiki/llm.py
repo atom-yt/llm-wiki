@@ -73,3 +73,40 @@ class LLMClient:
             raise RuntimeError(
                 f"LLM returned invalid JSON. Raw response:\n{text[:500]}"
             )
+
+    def chat_stream(
+        self,
+        messages: list[dict],
+    ):
+        """Send a chat completion request and stream the response.
+
+        Parameters
+        ----------
+        messages : list[dict]
+            OpenAI-style messages (role/content dicts).
+
+        Yields
+        ------
+        str  Chunks of the assistant's reply text.
+        """
+        kwargs: dict = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+        }
+
+        try:
+            stream = self.client.chat.completions.create(**kwargs)
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except APITimeoutError:
+            raise RuntimeError(
+                "LLM API request timed out. Check your network or try again."
+            )
+        except APIConnectionError:
+            raise RuntimeError(
+                "Cannot connect to the LLM API. Check base_url in config.yaml."
+            )
+        except APIError as e:
+            raise RuntimeError(f"LLM API error: {e.message}")
