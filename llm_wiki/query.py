@@ -1,12 +1,113 @@
+"""Query the wiki and optionally archive the answer."""
 import json
 import re
 import sys
 from pathlib import Path
+from datetime import datetime
+from enum import Enum
 
 import click
 
 from llm_wiki.llm import LLMClient
 from llm_wiki.wiki import WikiManager
+
+
+class OutputFormat(Enum):
+    """答案输出格式"""
+    MARKDOWN = "markdown"
+    TABLE = "table"
+    COMPARISON = "comparison"
+    LIST = "list"
+
+
+def format_answer(
+    question: str,
+    answer: str,
+    format_type: OutputFormat = OutputFormat.MARKDOWN
+) -> str:
+    """将答案格式化为不同输出
+
+    Args:
+        question: 用户问题
+        answer: LLM 生成的答案
+        format_type: 输出格式
+
+    Returns:
+        格式化后的答案
+    """
+    if format_type == OutputFormat.MARKDOWN:
+        return answer
+
+    if format_type == OutputFormat.LIST:
+        # 提取要点列表
+        lines = answer.split('\n')
+        result = "# Answer (List Format)\n\n"
+        in_list = False
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('#'):
+                # 跳过标题，因为会重新组织
+                continue
+            elif stripped.startswith('-') or stripped.startswith('*'):
+                in_list = True
+                result += stripped + '\n'
+            elif in_list and stripped:
+                # 列表的续行
+                result += stripped + '\n'
+            else:
+                in_list = False
+
+        return result
+
+    if format_type == OutputFormat.TABLE:
+        # 尝试提取表格数据
+        # 简单实现：查找 Markdown 表格
+        tables = re.findall(r'\|[^\n]+(?:\n\|[^\n]+)+', answer)
+        if tables:
+            return "# Answer (Table Format)\n\n" + tables[0]
+
+        # 如果没有表格，尝试创建一个
+        sections = re.split(r'##+\s+', answer)
+        if len(sections) > 1:
+            result = "# Answer (Table Format)\n\n"
+            for section in sections[1:4]:  # 最多 3 个部分
+                lines = section.split('\n')
+                title = lines[0].strip()
+                content = '\n'.join(lines[1:5]) if len(lines) > 1 else ''
+                result += f"## {title}\n\n"
+                result += f"| Aspect | Details |\n|---------|----------|\n"
+                for line in content.split('\n')[:3]:
+                    if line.strip() and not line.strip().startswith('#'):
+                        result += f"| {line.strip()} |\n"
+                result += '\n'
+            return result
+
+        return answer
+
+    if format_type == OutputFormat.COMPARISON:
+        # 创建对比格式
+        # 提取可能的选项/替代方案
+        options = re.findall(r'\*+\s*(.+?):', answer)
+        if options:
+            result = "# Answer (Comparison Format)\n\n"
+            result += "| Option | Description |\n|---------|-------------|\n"
+            for i, option in enumerate(options[:5], 1):
+                result += f"| Option {i} | {option.strip()} |\n"
+            return result
+
+        # 按段落组织
+        paragraphs = [p.strip() for p in answer.split('\n\n') if p.strip()]
+        if len(paragraphs) > 1:
+            result = "# Answer (Comparison Format)\n\n"
+            for i, para in enumerate(paragraphs[:4], 1):
+                result += f"### Point {i}\n\n{para}\n\n"
+            return result
+
+        return answer
+
+    # 默认返回原始答案
+    return answer
 
 
 _SELECT_PAGES_PROMPT = """\
@@ -60,27 +161,53 @@ def run_query(
     save: bool,
     wiki: WikiManager,
     llm: LLMClient,
+    use_qmd: bool = True,
 ) -> str:
     """Query the wiki and return the answer text."""
-    index_text = wiki.read_index()
 
-    # Step 1: select relevant pages
+    # 初始化 QMD 检索器
+    from llm_wiki.qmd_retriever import QMDRetriever
+    from llm_wiki.page_selector import PageSelector
+
+    retriever = QMDRetriever(wiki, enable_qmd=use_qmd)
+    selector = PageSelector(wiki)
+
+    # Step 1: 使用 QMD/BM25 语义搜索选择相关页面
     click.echo("Searching wiki...")
-    select_messages = [
-        {
-            "role": "system",
-            "content": _SELECT_PAGES_PROMPT.format(index=index_text),
-        },
-        {"role": "user", "content": question},
-    ]
-    selection = llm.chat_json(select_messages)
-    selected_pages = selection.get("pages", [])
+
+    if use_qmd:
+        status = retriever.get_status()
+        search_mode = status.get("search_mode", "Unknown")
+        click.echo(f"Searching wiki ({search_mode})...")
+
+        search_results = retriever.search(question, top_k=10)
+        selected_pages = [f"{name}.md" for name, _ in search_results]
+        click.echo(f"Found {len(selected_pages)} relevant pages.")
+    else:
+        # 使用页面选择器
+        click.echo("Using page selector...")
+        search_results = selector.select_for_query(question, top_k=10)
+        selected_pages = [f"{name}.md" for name, _ in search_results]
+        click.echo(f"Found {len(selected_pages)} relevant pages.")
+
+    # 如果搜索没有结果，回退到 LLM 选择
+    if not selected_pages:
+        click.echo("No results from search, using LLM selection...")
+        index_text = wiki.read_index()
+        select_messages = [
+            {
+                "role": "system",
+                "content": _SELECT_PAGES_PROMPT.format(index=index_text),
+            },
+            {"role": "user", "content": question},
+        ]
+        selection = llm.chat_json(select_messages)
+        selected_pages = selection.get("pages", [])
+        click.echo(f"Found {len(selected_pages)} relevant pages.")
 
     if not selected_pages:
         click.echo("No relevant pages found in the wiki.")
         return ""
-
-    click.echo(f"Found {len(selected_pages)} relevant pages.")
 
     # Step 2: read selected pages
     pages_content_parts = []

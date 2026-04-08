@@ -132,6 +132,72 @@ class WikiManager:
         path.write_text(content, encoding="utf-8")
         return path
 
+    def update_wiki_page(
+        self,
+        name: str,
+        new_content: str,
+        strategy: str = "merge",
+        source_name: str = "unknown"
+    ) -> Path:
+        """智能更新页面（合并而非覆盖）
+
+        Parameters
+        ----------
+        name : str
+            页面名称
+        new_content : str
+            新内容
+        strategy : str
+            合并策略: "merge", "append", "prepend", "replace"
+        source_name : str
+            来源名称
+
+        Returns
+        -------
+        Path
+            页面路径
+        """
+        from llm_wiki.merge_strategies import parse_strategy, merge_pages
+        from llm_wiki.frontmatter import FrontMatter
+
+        if not name.endswith(".md"):
+            name += ".md"
+        path = self.wiki_dir / name
+
+        if path.exists():
+            # 页面已存在，执行合并
+            existing = path.read_text(encoding="utf-8")
+
+            # 解析 front-matter，添加来源追踪
+            fm = FrontMatter(existing)
+            fm.add_source(source_name)
+
+            # 合并内容
+            merge_strategy = parse_strategy(strategy)
+            merged_body = merge_pages(
+                fm.body,
+                new_content,
+                merge_strategy,
+                source_name
+            )
+
+            # 重新组装
+            final_content = fm.render_with_new_body(merged_body)
+            path.write_text(final_content, encoding="utf-8")
+        else:
+            # 新建页面
+            from pathlib import Path as PathLib
+            page_type = _infer_page_type(name)
+
+            fm = FrontMatter.create(
+                page_type=page_type,
+                sources=[source_name]
+            )
+            final_content = fm.render_with_new_body(new_content)
+            path.write_text(final_content, encoding="utf-8")
+
+        return path
+
     def wiki_page_exists(self, name: str) -> bool:
         if not name.endswith(".md"):
             name += ".md"
@@ -160,22 +226,28 @@ class WikiManager:
     def read_log(self) -> str:
         return (self.wiki_dir / "log.md").read_text(encoding="utf-8")
 
-    def append_log(self, action: str, title: str, details: list[str]) -> None:
-        """Append an entry to log.md.
+    def append_log(self, action: str, title: str, details: list[str],
+                 pages_affected: list[str] = None,
+                 metadata: dict = None) -> str:
+        """Append an entry to log.md (returns entry_id).
 
         Parameters
         ----------
         action : str   e.g. "ingest", "query", "lint"
         title  : str   human-readable title
         details : list  bullet-point lines
+        pages_affected : list  pages that were changed
+        metadata : dict  additional metadata
+
+        Returns
+        -------
+        str
+            entry_id for the log entry
         """
-        log_path = self.wiki_dir / "log.md"
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        entry = f"\n## [{date_str}] {action} | {title}\n"
-        for d in details:
-            entry += f"- {d}\n"
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(entry)
+        from llm_wiki.wiki_log import WikiLog
+
+        log = WikiLog(self)
+        return log.append_entry(action, title, details, pages_affected, metadata)
 
     # ── Schema ──────────────────────────────────────────────────────
 
@@ -247,3 +319,20 @@ class WikiManager:
         # Match [text](target.md) patterns
         links = re.findall(r"\[.*?\]\(([^)]+\.md)\)", text)
         return [l.replace(".md", "") for l in links]
+
+
+def _infer_page_type(filename: str) -> str:
+    """从文件名推断页面类型"""
+    if filename.startswith("source-"):
+        return "source"
+    elif filename.startswith("entity-"):
+        return "entity"
+    elif filename.startswith("concept-"):
+        return "concept"
+    elif filename.startswith("procedure-"):
+        return "procedure"
+    elif filename.startswith("incident-"):
+        return "incident"
+    elif filename.startswith("query-"):
+        return "query"
+    return "page"

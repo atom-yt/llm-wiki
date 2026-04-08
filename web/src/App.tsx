@@ -7,6 +7,7 @@ import {
   ImportOutlined,
   SearchOutlined,
   SafetyCertificateOutlined,
+  PlayCircleOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import zhCN from 'antd/locale/zh_CN'
@@ -14,6 +15,7 @@ import enUS from 'antd/locale/en_US'
 import Dashboard from './pages/Dashboard'
 import WikiBrowser from './pages/WikiBrowser'
 import IngestPage from './pages/IngestPage'
+import IngestInteractivePage from './pages/IngestInteractivePage'
 import QueryPage from './pages/QueryPage'
 import LintPage from './pages/LintPage'
 import LanguageSelector from './components/LanguageSelector'
@@ -32,6 +34,7 @@ function AppContent() {
     { key: '/', icon: <DashboardOutlined />, label: t('nav.dashboard') },
     { key: '/wiki', icon: <BookOutlined />, label: t('nav.wikiBrowser') },
     { key: '/ingest', icon: <ImportOutlined />, label: t('nav.ingest') },
+    { key: '/ingest-interactive', icon: <PlayCircleOutlined />, label: t('nav.ingestInteractive') },
     { key: '/query', icon: <SearchOutlined />, label: t('nav.query') },
     { key: '/lint', icon: <SafetyCertificateOutlined />, label: t('nav.healthCheck') },
   ]
@@ -104,6 +107,7 @@ function AppContent() {
               <Route path="/wiki" element={<WikiBrowser />} />
               <Route path="/wiki/:pageName" element={<WikiBrowser />} />
               <Route path="/ingest" element={<IngestPage />} />
+              <Route path="/ingest-interactive" element={<IngestInteractivePage />} />
               <Route path="/query" element={<QueryPage />} />
               <Route path="/lint" element={<LintPage />} />
             </Routes>

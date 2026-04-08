@@ -186,3 +186,88 @@ export async function lintWiki(fix = false): Promise<LintResponse> {
   const res = await api.post<LintResponse>('/lint', { fix });
   return res.data;
 }
+
+// ── Interactive Ingest API ─────────────────────────────────
+
+export interface KeyPointsResponse {
+  key_points: string[];
+  session_id: string;
+}
+
+export interface PageProposal {
+  filename: string;
+  action: 'create' | 'update';
+  strategy: string;
+  diff?: string;
+  content_preview: string;
+}
+
+export interface ProposePagesResponse {
+  proposals: PageProposal[];
+  session_id: string;
+}
+
+export interface ApplyRequest {
+  session_id: string;
+  approved_pages: string[];
+  rejected_pages?: string[];
+  strategies?: Record<string, string>;
+}
+
+export interface ApplyResponse {
+  created: string[];
+  updated: string[];
+  pages_affected: string[];
+}
+
+export async function ingestStart(sourceFile: string): Promise<KeyPointsResponse> {
+  const res = await api.post<KeyPointsResponse>('/ingest/start', { source_file: sourceFile });
+  return res.data;
+}
+
+export async function ingestPropose(
+  sessionId: string,
+  approvedKeyPoints?: string[],
+  userFeedback?: string
+): Promise<ProposePagesResponse> {
+  const res = await api.post<ProposePagesResponse>('/ingest/propose', {
+    session_id: sessionId,
+    approved_key_points: approvedKeyPoints,
+    user_feedback: userFeedback,
+  });
+  return res.data;
+}
+
+export async function ingestApply(req: ApplyRequest): Promise<ApplyResponse> {
+  const res = await api.post<ApplyResponse>('/ingest/apply', req);
+  return res.data;
+}
+
+// ── QMD API ──────────────────────────────────────────────
+
+export interface QMDIndexRequest {
+  force: boolean;
+}
+
+export interface QMDIndexResponse {
+  indexed: number;
+  message: string;
+}
+
+export interface QMDStatusResponse {
+  available: boolean;
+  cache_dir: string;
+  cache_exists: boolean;
+  indexed_pages: number;
+  total_pages: number;
+}
+
+export async function qmdIndex(force: boolean = false): Promise<QMDIndexResponse> {
+  const res = await api.post<QMDIndexResponse>('/qmd/index', { force });
+  return res.data;
+}
+
+export async function qmdStatus(): Promise<QMDStatusResponse> {
+  const res = await api.get<QMDStatusResponse>('/qmd/status');
+  return res.data;
+}

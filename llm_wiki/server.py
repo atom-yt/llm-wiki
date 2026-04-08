@@ -19,6 +19,8 @@ from llm_wiki.llm import LLMClient
 class QueryRequest(BaseModel):
     question: str
     save: bool = False
+    use_qmd: bool = True
+    format: str = "markdown"
 
 
 class QueryResponse(BaseModel):
@@ -61,6 +63,24 @@ class PageInfo(BaseModel):
 class PageContent(BaseModel):
     name: str
     content: str
+
+
+class QMDIndexRequest(BaseModel):
+    force: bool = False
+
+
+class QMDIndexResponse(BaseModel):
+    indexed: int
+    message: str
+
+
+class QMDStatusResponse(BaseModel):
+    available: bool
+    cache_dir: str
+    cache_exists: bool
+    indexed_pages: int
+    total_pages: int
+    search_mode: str = "BM25 Keyword"  # QMD Semantic, SimpleEmbedder (TF-IDF), BM25 Keyword
 
 
 # ── App factory ───────────────────────────────────────────────────
@@ -150,6 +170,167 @@ def create_app(root_dir: str = ".") -> FastAPI:
         with contextlib.redirect_stdout(f):
             result = run_ingest(req.source_file, wiki, llm)
         return IngestResponse(**result)
+
+    # ── Interactive Ingest ─────────────────────────────────────
+
+    class IngestStartRequest(BaseModel):
+        source_file: str
+        mode: str = "interactive"  # "auto", "interactive"
+
+    class KeyPointsResponse(BaseModel):
+        key_points: list[str]
+        session_id: str
+
+    class PageProposal(BaseModel):
+        filename: str
+        action: str  # "create" or "update"
+        strategy: str = "merge"
+        diff: Optional[str] = None  # 对于 update，显示 diff
+        content_preview: str
+
+    class ProposePagesRequest(BaseModel):
+        session_id: str
+        approved_key_points: Optional[list[str]] = None
+        user_feedback: Optional[str] = None
+
+    class ProposePagesResponse(BaseModel):
+        proposals: list[PageProposal]
+        session_id: str
+
+    class ApplyRequest(BaseModel):
+        session_id: str
+        approved_pages: list[str]  # 要创建/更新的页面文件名
+        rejected_pages: list[str] = []
+        strategies: Optional[dict] = None  # {filename: strategy}
+
+    class ApplyResponse(BaseModel):
+        created: list[str]
+        updated: list[str]
+        pages_affected: list[str]
+
+    @app.post("/api/ingest/start", response_model=KeyPointsResponse)
+    def ingest_start(req: IngestStartRequest):
+        """开始交互式 ingest，提取关键点"""
+        llm = _llm()
+        from llm_wiki.ingest_interactive import create_session, extract_key_points
+
+        session = create_session(req.source_file, wiki)
+        key_points = extract_key_points(session, wiki, llm)
+
+        return KeyPointsResponse(
+            key_points=key_points,
+            session_id=session.session_id
+        )
+
+    @app.post("/api/ingest/propose", response_model=ProposePagesResponse)
+    def ingest_propose(req: ProposePagesRequest):
+        """基于批准的关键点，提出页面方案"""
+        llm = _llm()
+        from llm_wiki.ingest_interactive import (
+            get_session,
+            propose_pages,
+            parse_strategy
+        )
+
+        session = get_session(req.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        proposals_data = propose_pages(
+            session, wiki, llm, req.user_feedback or ""
+        )
+
+        # 转换为响应格式
+        proposals = []
+        for p in proposals_data:
+            filename = p.get("filename", "")
+            action = p.get("action", "create")
+            strategy = p.get("strategy", "merge")
+            content = p.get("content", "")
+
+            # 如果是 update，生成 diff
+            diff = None
+            if action == "update" and wiki.wiki_page_exists(filename):
+                existing = wiki.read_wiki_page(filename)
+                diff = _generate_diff(existing, content)
+
+            # 截取预览
+            preview = content[:500] + "..." if len(content) > 500 else content
+
+            proposals.append(PageProposal(
+                filename=filename,
+                action=action,
+                strategy=strategy,
+                diff=diff,
+                content_preview=preview
+            ))
+
+        return ProposePagesResponse(
+            proposals=proposals,
+            session_id=req.session_id
+        )
+
+    @app.post("/api/ingest/apply", response_model=ApplyResponse)
+    def ingest_apply(req: ApplyRequest):
+        """应用批准的页面更改"""
+        from llm_wiki.ingest_interactive import (
+            get_session,
+            apply_pages,
+            delete_session
+        )
+
+        session = get_session(req.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        result = apply_pages(
+            session,
+            wiki,
+            req.approved_pages,
+            req.rejected_pages,
+            req.strategies
+        )
+
+        # 清理会话
+        delete_session(req.session_id)
+
+        return ApplyResponse(**result)
+
+    def _generate_diff(old: str, new: str) -> str:
+        """生成简单的 diff"""
+        import difflib
+        lines = difflib.unified_diff(
+            old.splitlines(keepends=True),
+            new.splitlines(keepends=True),
+            fromfile="existing",
+            tofile="proposed",
+            lineterm=""
+        )
+        return "".join(lines)[:1000] + "... (truncated)" if len("".join(lines)) > 1000 else "".join(lines)
+
+    # ── QMD ────────────────────────────────────────────────
+
+    @app.post("/api/qmd/index", response_model=QMDIndexResponse)
+    def qmd_index(req: QMDIndexRequest):
+        """Build or update QMD semantic search index."""
+        from llm_wiki.qmd_retriever import QMDRetriever
+
+        retriever = QMDRetriever(wiki)
+
+        indexed = retriever.index_pages(force=req.force)
+
+        message = f"Indexed {indexed} pages." if indexed > 0 else "No pages to index."
+        return QMDIndexResponse(indexed=indexed, message=message)
+
+    @app.get("/api/qmd/status", response_model=QMDStatusResponse)
+    def qmd_status():
+        """Check QMD availability and index status."""
+        from llm_wiki.qmd_retriever import QMDRetriever
+
+        retriever = QMDRetriever(wiki)
+
+        status = retriever.get_status()
+        return QMDStatusResponse(**status)
 
     # ── Query ─────────────────────────────────────────────────
 

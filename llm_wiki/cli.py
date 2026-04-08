@@ -56,8 +56,9 @@ def init(ctx, directory):
 
 @main.command()
 @click.argument("source_file")
+@click.option("--update-index/--no-update-index", default=True, help="Update QMD index after ingest")
 @click.pass_context
-def ingest(ctx, source_file):
+def ingest(ctx, source_file, update_index):
     """Ingest a source file into the wiki"""
     root = ctx.obj["root"]
     wm = _wiki(root)
@@ -66,14 +67,15 @@ def ingest(ctx, source_file):
 
     from llm_wiki.ingest import run_ingest
 
-    run_ingest(source_file, wm, llm)
+    run_ingest(source_file, wm, llm, update_qmd_index=update_index)
 
 
 @main.command()
 @click.argument("question")
 @click.option("--save", is_flag=True, help="Archive answer as a wiki page")
+@click.option("--qmd/--no-qmd", default=True, help="Use QMD semantic search (default: true)")
 @click.pass_context
-def query(ctx, question, save):
+def query(ctx, question, save, qmd):
     """Query the wiki"""
     root = ctx.obj["root"]
     wm = _wiki(root)
@@ -82,7 +84,80 @@ def query(ctx, question, save):
 
     from llm_wiki.query import run_query
 
-    run_query(question, save, wm, llm)
+    run_query(question, save, wm, llm, use_qmd=qmd)
+
+
+@main.command()
+@click.option("--force", "-f", is_flag=True, help="Force reindex all pages")
+@click.pass_context
+def index(ctx, force):
+    """Build QMD semantic search index for wiki pages"""
+    root = ctx.obj["root"]
+    wm = _wiki(root)
+    _require_init(wm)
+
+    from llm_wiki.qmd_retriever import QMDRetriever
+
+    retriever = QMDRetriever(wm)
+
+    click.echo("Building QMD index...")
+    indexed = retriever.index_pages(force=force)
+
+    if indexed > 0:
+        click.echo(f"Indexed {indexed} pages.")
+    else:
+        click.echo("All pages are already indexed.")
+        click.echo("Use --force to rebuild the index.")
+
+    # 显示状态
+    status = retriever.get_status()
+    click.echo(f"\nQMD Available: {status['available']}")
+    click.echo(f"Indexed Pages: {status['indexed_pages']}/{status['total_pages']}")
+    click.echo(f"Search Mode: {status.get('search_mode', 'Unknown')}")
+
+
+@main.command()
+@click.option("--analyze", is_flag=True, help="Analyze wiki and suggest schema improvements")
+@click.pass_context
+def schema(ctx, analyze):
+    """Manage wiki schema"""
+    root = ctx.obj["root"]
+    wm = _wiki(root)
+    _require_init(wm)
+
+    if not analyze:
+        # 显示当前 schema
+        schema_text = wm.read_schema()
+        click.echo("Current Wiki Schema:")
+        click.echo("=" * 40)
+        click.echo(schema_text)
+        return
+
+    # 执行分析
+    llm = _llm_client(root)
+    from llm_wiki.schema_analyzer import analyze_and_suggest
+
+    click.echo("Analyzing wiki structure...")
+    suggestions = analyze_and_suggest(wm, llm)
+
+    if not suggestions:
+        click.echo("No improvements suggested. Your wiki looks good!")
+        return
+
+    click.echo("Schema Analysis:")
+    click.echo("=" * 40)
+
+    for suggestion in suggestions:
+        priority = suggestion.get("priority", "medium").upper()
+        title = suggestion.get("title", "")
+        description = suggestion.get("description", "")
+        code = suggestion.get("code", "")
+
+        click.echo(f"\n[{priority}] {title}")
+        click.echo(f"  {description}")
+        if code:
+            click.echo(f"\n  Suggested change:")
+            click.echo(f"  {code}")
 
 
 @main.command()

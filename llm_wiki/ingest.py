@@ -49,17 +49,18 @@ def _slugify(text: str) -> str:
 
 
 def _build_existing_pages_context(
-    wiki: WikiManager, index_text: str
+    wiki: WikiManager, index_text: str, source_content: str = ""
 ) -> str:
-    """Read recent existing wiki pages to give LLM context (limit to avoid prompt overflow)."""
-    pages = wiki.list_wiki_pages()
-    if not pages:
+    """智能选择相关页面作为上下文"""
+    from llm_wiki.page_selector import PageSelector
+
+    selector = PageSelector(wiki)
+    selected_pages = selector.select_for_ingest(source_content, max_pages=10)
+
+    if not selected_pages:
         return "(no existing pages)"
 
-    # Only read the most recent 10 pages to keep prompt short
-    pages = pages[-10:]
-
-    # Use ThreadPoolExecutor to read pages in parallel
+    # 并行读取选定的页面
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     parts = []
@@ -67,7 +68,7 @@ def _build_existing_pages_context(
     def read_page(name: str) -> tuple[str, str] | None:
         try:
             content = wiki.read_wiki_page(name)
-            # Truncate to 1000 chars (reduced from 2000)
+            # Truncate to 1000 chars
             if len(content) > 1000:
                 content = content[:1000] + "\n...(truncated)"
             return (name, content)
@@ -76,7 +77,7 @@ def _build_existing_pages_context(
 
     # Read pages in parallel
     with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(read_page, name): name for name in pages}
+        futures = {executor.submit(read_page, name): name for name in selected_pages}
         for future in as_completed(futures):
             result = future.result()
             if result:
@@ -125,7 +126,8 @@ def _update_index(wiki: WikiManager, entries: list[dict]) -> None:
     wiki.write_index(index_text)
 
 
-def run_ingest(source_file: str, wiki: WikiManager, llm: LLMClient) -> dict:
+def run_ingest(source_file: str, wiki: WikiManager, llm: LLMClient,
+              update_qmd_index: bool = True) -> dict:
     """Ingest a source file and update the wiki.
 
     Returns a dict with keys: key_points, created, updated.
@@ -139,7 +141,7 @@ def run_ingest(source_file: str, wiki: WikiManager, llm: LLMClient) -> dict:
     # Build prompt context
     schema = wiki.read_schema()
     index = wiki.read_index()
-    existing_pages = _build_existing_pages_context(wiki, index)
+    existing_pages = _build_existing_pages_context(wiki, index, source_content)
 
     system_msg = _INGEST_SYSTEM_PROMPT.format(
         schema=schema,

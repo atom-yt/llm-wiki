@@ -1,12 +1,16 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Card, Input, Button, Checkbox, Space, Spin, Tag, Typography, Empty, Divider,
+  Badge, Dropdown, Menu, message,
 } from 'antd'
-import { SendOutlined, SaveOutlined } from '@ant-design/icons'
+import {
+  SendOutlined, SaveOutlined, ReloadOutlined, SearchOutlined,
+} from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
-import { queryWikiStream } from '../services/api'
-import MarkdownViewer from '../components/MarkdownViewer'
 import { useNavigate } from 'react-router-dom'
+import { queryWikiStream, qmdStatus, qmdIndex } from '../services/api'
+import type { QMDStatusResponse } from '../services/api'
+import MarkdownViewer from '../components/MarkdownViewer'
 
 const { TextArea } = Input
 const { Text } = Typography
@@ -22,6 +26,10 @@ export default function QueryPage() {
   const [answer, setAnswer] = useState('')
   const [archivedAs, setArchivedAs] = useState<string | null>(null)
   const [error, setError] = useState('')
+
+  // QMD 状态
+  const [qmdStatus, setQmdStatus] = useState<QMDStatusResponse | null>(null)
+  const [indexing, setIndexing] = useState(false)
 
   const handleQuery = async () => {
     if (!question.trim()) return
@@ -65,6 +73,33 @@ export default function QueryPage() {
     }
   }
 
+  // 加载 QMD 状态
+  useEffect(() => {
+    qmdStatus().then(setQmdStatus).catch(() => setQmdStatus(null))
+  }, [])
+
+  const handleRebuildIndex = async () => {
+    setIndexing(true)
+    try {
+      const res = await qmdIndex(true)
+      if (res.indexed > 0) {
+        message.success(res.message)
+      // 重新加载状态
+      qmdStatus().then(setQmdStatus)
+      setQmdStatus(prev => prev ? {
+        ...prev,
+        indexed_pages: prev.indexed_pages + res.indexed,
+      } : null)
+      } else {
+        message.info(res.message)
+      }
+    } catch (err: any) {
+      message.error(err?.message || t('qmd.rebuildFailed'))
+    } finally {
+      setIndexing(false)
+    }
+  }
+
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Card title={t('query.askQuestion')}>
@@ -96,6 +131,47 @@ export default function QueryPage() {
         <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
           {t('query.submitHint')}
         </Text>
+
+        {/* QMD / 搜索模式状态 */}
+        {qmdStatus && (
+          <div style={{
+            marginTop: 12,
+            padding: '8px 12px',
+            background: '#f5f7fa',
+            borderRadius: '6px',
+            fontSize: '12px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}>
+            <Space size="small">
+              <Text type="secondary">
+                {t('qmd.status')}:{' '}
+                {qmdStatus.search_mode === 'QMD Semantic' && (
+                  <Tag color="green" style={{ margin: 0 }}>{t('qmd.qmdAvailable')}</Tag>
+                )}
+                {qmdStatus.search_mode === 'SimpleEmbedder (TF-IDF)' && (
+                  <Tag color="blue" style={{ margin: 0 }}>TF-IDF Embedding</Tag>
+                )}
+                {qmdStatus.search_mode === 'BM25 Keyword' && (
+                  <Tag color="default" style={{ margin: 0 }}>BM25 Keyword</Tag>
+                )}
+              </Text>
+              <Text type="secondary" style={{ fontSize: '11px' }}>
+                {qmdStatus.indexed_pages} / {qmdStatus.total_pages} {t('qmd.indexedPages')}
+              </Text>
+            </Space>
+            <Button
+              type="text"
+              size="small"
+              icon={<ReloadOutlined />}
+              loading={indexing}
+              onClick={handleRebuildIndex}
+            >
+              {t('qmd.rebuildIndex')}
+            </Button>
+          </div>
+        )}
       </Card>
 
       {loading && !streamingStarted && (
