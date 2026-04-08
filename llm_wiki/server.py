@@ -336,30 +336,19 @@ def create_app(root_dir: str = ".") -> FastAPI:
 
     @app.post("/api/query", response_model=QueryResponse)
     def query(req: QueryRequest):
+        """Query wiki with QMD/BM25/SimpleEmbedder semantic search."""
+        from llm_wiki.qmd_retriever import QMDRetriever
+        from llm_wiki.query import _ANSWER_PROMPT, _slugify
+
         llm = _llm()
 
-        # We inline the query logic here to get structured results
-        from llm_wiki.query import (
-            _SELECT_PAGES_PROMPT,
-            _ANSWER_PROMPT,
-            _slugify,
-        )
-
-        index_text = wiki.read_index()
-
-        # Step 1: select pages
-        select_messages = [
-            {
-                "role": "system",
-                "content": f"Return JSON: {{\"pages\": [\"filename.md\", ...]}}.\nSelect up to 5 most relevant pages for the query.\n\nAvailable: {', '.join(wiki.list_wiki_pages())}",
-            },
-            {"role": "user", "content": req.question},
-        ]
-        selection = llm.chat_json(select_messages)
-        selected_pages = selection.get("pages", [])
+        # Step 1: Use QMDRetriever for fast page selection (no LLM call!)
+        retriever = QMDRetriever(wiki, enable_qmd=req.use_qmd)
+        search_results = retriever.search(req.question, top_k=10)
+        selected_pages = [f"{name}.md" for name, _ in search_results]
 
         if not selected_pages:
-            return QueryResponse(answer="No relevant pages found in the wiki.")
+            return QueryResponse(answer="No relevant pages found in wiki.", selected_pages=[])
 
         # Step 2: read pages
         parts = []
@@ -441,21 +430,15 @@ def create_app(root_dir: str = ".") -> FastAPI:
 
         llm = _llm()
 
-        from llm_wiki.query import (
-            _SELECT_PAGES_PROMPT,
-            _ANSWER_PROMPT,
-            _slugify,
-        )
+        from llm_wiki.qmd_retriever import QMDRetriever
+        from llm_wiki.query import _ANSWER_PROMPT, _slugify
 
-        # Get available pages for selection
-        all_pages = wiki.list_wiki_pages()
-        select_messages = [
-            {
-                "role": "system",
-                "content": f"Return JSON: {{\"pages\": [\"filename.md\", ...]}}.\nSelect up to 5 most relevant pages for the query.\n\nAvailable: {', '.join(all_pages)}",
-            },
-            {"role": "user", "content": req.question},
-        ]
+        llm = _llm()
+
+        # Step 1: Use QMDRetriever for fast page selection (no LLM call!)
+        retriever = QMDRetriever(wiki, enable_qmd=req.use_qmd)
+        search_results = retriever.search(req.question, top_k=10)
+        selected_pages = [f"{name}.md" for name, _ in search_results]
 
         # Helper to run blocking generator in thread and yield items
         async def stream_from_blocking(gen_func):
@@ -485,10 +468,6 @@ def create_app(root_dir: str = ".") -> FastAPI:
                     break
                 yield item
 
-        # Step 1: select pages in thread (non-blocking)
-        selection = await asyncio.to_thread(functools.partial(llm.chat_json, select_messages))
-        selected_pages = selection.get("pages", [])
-
         async def event_generator():
             # Send selected pages event first
             selected_pages_json = json.dumps(selected_pages)
@@ -499,7 +478,7 @@ def create_app(root_dir: str = ".") -> FastAPI:
                 yield f"event: done\ndata: {error_json}\n\n"
                 return
 
-            # Step 2: read pages
+            # Step 2: read pages (selected_pages from QMDRetriever)
             parts = []
             for pf in selected_pages:
                 pn = pf.replace(".md", "")
