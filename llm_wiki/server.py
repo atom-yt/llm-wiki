@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional
 import json
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
@@ -81,6 +81,39 @@ class QMDStatusResponse(BaseModel):
     indexed_pages: int
     total_pages: int
     search_mode: str = "BM25 Keyword"  # QMD Semantic, SimpleEmbedder (TF-IDF), BM25 Keyword
+
+
+# ── Graph API models ─────────────────────────────────────────────
+
+class GraphNode(BaseModel):
+    id: str
+    title: str
+    type: str
+    inbound: int
+    outbound: int
+
+
+class GraphEdge(BaseModel):
+    source: str
+    target: str
+
+
+class HubInfo(BaseModel):
+    page: str
+    links: int
+
+
+class GraphStats(BaseModel):
+    total_nodes: int
+    total_edges: int
+    orphan_pages: int
+    hubs: list[HubInfo]
+
+
+class GraphResponse(BaseModel):
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+    stats: GraphStats
 
 
 # ── App factory ───────────────────────────────────────────────────
@@ -170,6 +203,155 @@ def create_app(root_dir: str = ".") -> FastAPI:
         with contextlib.redirect_stdout(f):
             result = run_ingest(req.source_file, wiki, llm)
         return IngestResponse(**result)
+
+    @app.post("/api/ingest/stream")
+    async def ingest_stream(req: IngestRequest):
+        """流式 ingest，实时返回进度更新"""
+        import asyncio
+        import json
+        from queue import Queue
+        from concurrent.futures import ThreadPoolExecutor
+
+        llm = _llm()
+        from llm_wiki.ingest_optimized import AsyncIngestManager, IngestProgressUpdate
+
+        # Queue for SSE events
+        progress_queue: Queue = Queue()
+
+        # Progress callback (called from thread)
+        def on_progress(update: IngestProgressUpdate):
+            progress_queue.put(("progress", update))
+
+        # Run ingest in a thread (since LLM calls are blocking)
+        def run_ingest_in_thread():
+            try:
+                # Create a sync wrapper that calls progress callback
+                source_file = req.source_file
+                source_content = wiki.read_raw_source(source_file)
+                source_name = Path(source_file).stem
+
+                progress_queue.put(("progress", {"stage": "analyzing", "progress": 10, "message": f"正在分析: {source_file}"}))
+
+                # Build context
+                from llm_wiki.ingest_optimized import _build_existing_pages_context, _INGEST_SYSTEM_PROMPT, _update_index
+                schema = wiki.read_schema()
+                index = wiki.read_index()
+                existing_pages = _build_existing_pages_context(wiki, index, source_content)
+
+                progress_queue.put(("progress", {"stage": "analyzing", "progress": 20, "message": "正在提取关键点..."}))
+
+                system_msg = _INGEST_SYSTEM_PROMPT.format(
+                    schema=schema,
+                    index=index,
+                    existing_pages=existing_pages,
+                )
+
+                messages = [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": f"Process this source document:\n\n{source_content}"},
+                ]
+
+                # Call LLM (blocking)
+                progress_queue.put(("progress", {"stage": "analyzing", "progress": 30, "message": "LLM 正在处理..."}))
+                result = llm.chat_json(messages)
+
+                key_points = result.get("key_points", [])
+                pages = result.get("pages", [])
+                index_entries = result.get("index_entries", [])
+
+                progress_queue.put(("progress", {"stage": "analyzing", "progress": 50, "message": f"提取到 {len(key_points)} 个关键点", "key_points": key_points}))
+
+                # Write pages
+                created = []
+                updated = []
+                total_pages = len(pages) or 1
+
+                for i, page in enumerate(pages):
+                    progress = 50 + (i + 1) / total_pages * 30
+                    filename = page.get("filename", "")
+                    progress_queue.put(("progress", {"stage": "writing", "progress": progress, "message": f"正在写入页面: {filename}"}))
+
+                    content = page.get("content", "")
+                    if "summary" in page and "sections" in page and not content:
+                        # Generate content from summary/sections
+                        sections = page.get("sections", [])
+                        content = f"# {page.get('summary', '')}\n\n"
+                        for section in sections:
+                            content += f"## {section}\n\n"
+
+                    action = page.get("action", "create")
+                    wiki.write_wiki_page(filename, content)
+                    if action == "update":
+                        updated.append(filename)
+                    else:
+                        created.append(filename)
+
+                progress_queue.put(("progress", {"stage": "writing", "progress": 80, "message": f"创建了 {len(created)} 个页面", "created": created, "updated": updated}))
+
+                # Update index
+                if index_entries:
+                    progress_queue.put(("progress", {"stage": "indexing", "progress": 90, "message": "正在更新索引..."}))
+                    _update_index(wiki, index_entries)
+                    updated.append("index.md")
+
+                # Log
+                progress_queue.put(("progress", {"stage": "logging", "progress": 95, "message": "正在记录日志..."}))
+                log_details = []
+                if created:
+                    log_details.append(f"Created: {', '.join(created)}")
+                if updated:
+                    log_details.append(f"Updated: {', '.join(updated)}")
+                wiki.append_log("ingest", source_name, log_details)
+
+                # Final result
+                progress_queue.put(("progress", {"stage": "completed", "progress": 100, "message": "完成！"}))
+                progress_queue.put(("result", {"key_points": key_points, "created": created, "updated": updated}))
+                progress_queue.put(("done", None))
+
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                progress_queue.put(("error", str(e)))
+                progress_queue.put(("done", None))
+
+        # Start thread
+        executor = ThreadPoolExecutor(max_workers=1)
+        loop = asyncio.get_event_loop()
+        future = loop.run_in_executor(executor, run_ingest_in_thread)
+
+        async def event_generator():
+            """Send SSE events"""
+            while True:
+                # Non-blocking check
+                await asyncio.sleep(0.05)
+                while not progress_queue.empty():
+                    event_type, data = progress_queue.get()
+
+                    if event_type == "done":
+                        yield f"event: done\ndata: \n\n"
+                        return
+
+                    elif event_type == "error":
+                        yield f"event: error\ndata: {json.dumps({'error': data})}\n\n"
+                        return
+
+                    elif event_type == "progress":
+                        data_json = json.dumps(data)
+                        yield f"event: progress\ndata: {data_json}\n\n"
+
+                    elif event_type == "result":
+                        data_json = json.dumps(data)
+                        yield f"event: result\ndata: {data_json}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     # ── Interactive Ingest ─────────────────────────────────────
 
@@ -592,6 +774,75 @@ def create_app(root_dir: str = ".") -> FastAPI:
             llm_issues=[LintIssue(**i) for i in result["llm_issues"]],
             fixes=result["fixes"],
         )
+
+    # ── Graph ───────────────────────────────────────────────────
+
+    @app.get("/api/graph", response_model=GraphResponse)
+    def get_graph():
+        """Get wiki graph data for visualization."""
+        from llm_wiki.link_graph import LinkGraph
+
+        graph = LinkGraph(wiki)
+        graph.load()
+
+        # Build nodes with stats
+        pages = wiki.list_wiki_pages()
+        summaries = wiki.collect_all_pages_summary()
+
+        nodes = []
+        for page in pages:
+            stats = graph.get_page_stats(page)
+            title = summaries.get(page, page)
+
+            # Infer page type from frontmatter or filename
+            try:
+                from llm_wiki.frontmatter import FrontMatter
+                content = wiki.read_wiki_page(page)
+                fm = FrontMatter(content)
+                page_type = fm.get("type", "page")
+            except:
+                page_type = "page"
+                if page.startswith("source-"):
+                    page_type = "source"
+                elif page.startswith("entity-"):
+                    page_type = "entity"
+                elif page.startswith("concept-"):
+                    page_type = "concept"
+                elif page.startswith("procedure-"):
+                    page_type = "procedure"
+                elif page.startswith("incident-"):
+                    page_type = "incident"
+                elif page.startswith("query-"):
+                    page_type = "query"
+
+            nodes.append(GraphNode(
+                id=page,
+                title=title,
+                type=page_type,
+                inbound=stats["inbound"],
+                outbound=stats["outbound"],
+            ))
+
+        # Build edges
+        edges = []
+        all_pages = graph.get_all_pages()
+        for page in all_pages:
+            outbound = graph.get_outbound(page)
+            for target in outbound:
+                edges.append(GraphEdge(source=page, target=target))
+
+        # Stats
+        orphans = graph.find_orphans()
+        hub_data = graph.find_hubs(limit=10)
+
+        stats = GraphStats(
+            total_nodes=len(nodes),
+            total_edges=len(edges),
+            orphan_pages=len(orphans),
+            hubs=[HubInfo(page=h[0], links=h[1]) for h in hub_data],
+        )
+
+        return GraphResponse(nodes=nodes, edges=edges, stats=stats)
 
     # ── Static files (frontend) ───────────────────────────────
 

@@ -118,31 +118,48 @@ def extract_key_points(
     system_prompt = """You are analyzing a source document for a wiki.
 
 Extract the key information from the source document.
+The source document may be in English or Chinese. Handle both languages appropriately.
+
 Focus on:
 1. Main entities (systems, tools, services)
 2. Important concepts and patterns
 3. Procedures and how-tos
 4. Specific facts and configurations
 
+For Chinese documents:
+- Identify technical terms, proper nouns, and key concepts
+- Extract meaningful phrases and sentences
+- Preserve technical terminology
+
 Return JSON:
 {
   "key_points": [
-    "clear, concise point 1",
-    "clear, concise point 2"
+    "clear, concise point in the source language",
+    "clear, concise point in the source language"
   ]
 }
 
-Keep each point to 1-2 sentences. Extract 5-15 key points."""
+Keep points in the same language as the source. Extract 5-15 key points."""
 
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": f"Source document:\n\n{session.source_content}"},
     ]
 
-    result = llm.chat_json(messages)
-    session.key_points = result.get("key_points", [])
-    session.approved_key_points = session.key_points.copy()
-    session.stage = IngestStage.REVIEWING
+    try:
+        result = llm.chat_json(messages)
+        session.key_points = result.get("key_points", [])
+        session.approved_key_points = session.key_points.copy()
+        session.stage = IngestStage.REVIEWING
+    except Exception as e:
+        import sys
+        print(f"Error in extract_key_points: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        session.error = f"LLM error: {str(e)}"
+        session.stage = IngestStage.COMPLETED
+        session.key_points = []
+        session.approved_key_points = []
 
     return session.key_points
 
@@ -191,34 +208,44 @@ def propose_pages(
 
 {"User Feedback: " + user_feedback if user_feedback else ""}
 
-## Instructions
-1. Create a source-xxx.md summary page
-2. Create/update entity pages for specific tools/systems
-3. Create/update concept pages for ideas/patterns
-4. Create/update procedure pages for how-tos
-5. For existing pages, decide if it's a create or update
-
-Return JSON:
+Analyze the key points and create wiki pages. Return JSON:
 {{
   "pages": [
     {{
-      "filename": "source-document-name.md",
+      "filename": "page-filename",
       "action": "create" or "update",
-      "strategy": "merge" or "append" or "prepend" or "replace",
-      "content": "markdown content for the page"
+      "strategy": "merge" or "replace",
+      "content": "Full markdown content for the page"
     }}
   ]
 }}
 
-For updates, use "merge" strategy unless the content completely replaces the old one."""
+Guidelines:
+1. Create separate pages for different entities, concepts, or procedures
+2. Check existing pages - update instead of creating duplicates
+3. Use "merge" strategy to add new information to existing pages
+4. Use "replace" strategy only when you're sure you want to completely replace content
+5. Follow the schema for page types (entity, concept, procedure, etc.)
+6. Include proper frontmatter in content
+7. The content should be complete, well-formatted markdown"""
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Source document:\n\n{session.source_content}"},
+        {"role": "user", "content": f"Create wiki pages from these key points.\n\nKey points:\n{points_text}"}
     ]
 
-    result = llm.chat_json(messages)
-    proposed = result.get("pages", [])
+    try:
+        result = llm.chat_json(messages)
+        proposed = result.get("pages", [])
+    except Exception as e:
+        import sys
+        print(f"Error in propose_pages: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        session.error = f"LLM error: {str(e)}"
+        session.stage = IngestStage.COMPLETED
+        return []
+
     session.proposed_pages = proposed
     session.stage = IngestStage.APPROVING
 

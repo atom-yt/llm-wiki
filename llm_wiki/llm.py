@@ -13,6 +13,8 @@ class LLMClient:
             base_url=llm_cfg.get("base_url", "https://api.openai.com/v1"),
         )
         self.model = llm_cfg.get("model", "gpt-4o")
+        # Longer timeout for processing large documents (default is 10 minutes)
+        self.timeout = llm_cfg.get("timeout", 600)
 
     def chat(
         self,
@@ -35,6 +37,7 @@ class LLMClient:
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
+            "timeout": self.timeout,
         }
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
@@ -93,6 +96,7 @@ class LLMClient:
             "model": self.model,
             "messages": messages,
             "stream": True,
+            "timeout": self.timeout,
         }
 
         try:

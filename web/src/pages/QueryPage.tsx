@@ -1,14 +1,13 @@
 import { useState, useEffect } from 'react'
 import {
-  Card, Input, Button, Checkbox, Space, Spin, Tag, Typography, Empty, Divider,
-  Badge, Dropdown, Menu, message,
+  Card, Input, Button, Checkbox, Space, Spin, Tag, Typography, Empty, Divider, message,
 } from 'antd'
 import {
-  SendOutlined, SaveOutlined, ReloadOutlined, SearchOutlined,
+  SendOutlined, SaveOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { queryWikiStream, qmdStatus, qmdIndex } from '../services/api'
+import { queryWikiStream, qmdStatus as fetchQmdStatus, qmdIndex } from '../services/api'
 import type { QMDStatusResponse } from '../services/api'
 import MarkdownViewer from '../components/MarkdownViewer'
 
@@ -75,7 +74,7 @@ export default function QueryPage() {
 
   // 加载 QMD 状态
   useEffect(() => {
-    qmdStatus().then(setQmdStatus).catch(() => setQmdStatus(null))
+    fetchQmdStatus().then(setQmdStatus).catch(() => setQmdStatus(null))
   }, [])
 
   const handleRebuildIndex = async () => {
@@ -85,7 +84,7 @@ export default function QueryPage() {
       if (res.indexed > 0) {
         message.success(res.message)
       // 重新加载状态
-      qmdStatus().then(setQmdStatus)
+      fetchQmdStatus().then(setQmdStatus)
       setQmdStatus(prev => prev ? {
         ...prev,
         indexed_pages: prev.indexed_pages + res.indexed,

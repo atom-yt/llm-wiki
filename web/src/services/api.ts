@@ -82,6 +82,112 @@ export async function ingestSource(sourceFile: string): Promise<IngestResponse> 
   return res.data;
 }
 
+// Streaming ingest with real-time progress
+export interface IngestProgressUpdate {
+  stage: string;
+  progress: number;
+  message: string;
+  key_points?: string[];
+  created?: string[];
+  updated?: string[];
+}
+
+export interface IngestStreamCallbacks {
+  onProgress: (update: IngestProgressUpdate) => void;
+  onDone: (result: IngestResponse) => void;
+  onError: (error: string) => void;
+}
+
+export async function ingestSourceStream(
+  sourceFile: string,
+  callbacks: IngestStreamCallbacks
+): Promise<void> {
+  console.log('[ingestSourceStream] Starting stream ingest:', { sourceFile });
+
+  try {
+    const res = await fetch('/api/ingest/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_file: sourceFile }),
+    });
+
+    console.log('[ingestSourceStream] Response status:', res.status, 'ok:', res.ok);
+
+    if (!res.ok) {
+      console.error('[ingestSourceStream] Response not OK, status:', res.status);
+      throw new Error(`HTTP error: ${res.status}`);
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) {
+      console.error('[ingestSourceStream] No response body reader');
+      throw new Error('No response body reader');
+    }
+
+    console.log('[ingestSourceStream] Reader created, starting to read...');
+
+    const decoder = new TextDecoder();
+    let finalResult: IngestResponse | null = null;
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        console.log('[ingestSourceStream] Stream ended');
+        break;
+      }
+
+      const chunk = decoder.decode(value, { stream: true });
+      buffer += chunk;
+
+      const lines = buffer.split('\n');
+      // Keep the last partial line in buffer
+      buffer = lines.pop() || '';
+
+      let eventType: string | undefined;
+
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine.startsWith('event: ')) {
+          eventType = trimmedLine.slice(7).trim();
+        } else if (trimmedLine.startsWith('data: ')) {
+          const data = trimmedLine.slice(6).trim();
+          if (!data) continue;
+
+          try {
+            const parsed = JSON.parse(data);
+            console.log('[ingestSourceStream] Event:', eventType, 'Data:', data);
+
+            if (parsed.key_points) {
+              callbacks.onProgress(parsed);
+            } else if (parsed.stage && parsed.progress !== undefined) {
+              callbacks.onProgress(parsed);
+            } else if (parsed.key_points !== undefined && parsed.created !== undefined) {
+              // Final result
+              finalResult = {
+                key_points: parsed.key_points || [],
+                created: parsed.created || [],
+                updated: parsed.updated || [],
+              };
+            }
+          } catch (e) {
+            console.error('[ingestSourceStream] Failed to parse SSE data:', data, e);
+          }
+        }
+      }
+    }
+
+    // Call onDone with final result
+    if (finalResult) {
+      callbacks.onDone(finalResult);
+    }
+  } catch (e: any) {
+    console.error('[ingestSourceStream] Stream error:', e);
+    callbacks.onError(e.message || 'Unknown error');
+    throw e;
+  }
+}
+
 export async function queryWiki(question: string, save = false): Promise<QueryResponse> {
   const res = await api.post<QueryResponse>('/query', { question, save });
   return res.data;
@@ -260,6 +366,7 @@ export interface QMDStatusResponse {
   cache_exists: boolean;
   indexed_pages: number;
   total_pages: number;
+  search_mode: string;  // "QMD Semantic", "SimpleEmbedder (TF-IDF)", "BM25 Keyword"
 }
 
 export async function qmdIndex(force: boolean = false): Promise<QMDIndexResponse> {
@@ -269,5 +376,38 @@ export async function qmdIndex(force: boolean = false): Promise<QMDIndexResponse
 
 export async function qmdStatus(): Promise<QMDStatusResponse> {
   const res = await api.get<QMDStatusResponse>('/qmd/status');
+  return res.data;
+}
+
+// ── Graph API ──────────────────────────────────────────────
+
+export interface GraphNode {
+  id: string;
+  title: string;
+  type: string;
+  inbound: number;
+  outbound: number;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+}
+
+export interface GraphStats {
+  total_nodes: number;
+  total_edges: number;
+  orphan_pages: number;
+  hubs: Array<{ page: string; links: number }>;
+}
+
+export interface GraphResponse {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  stats: GraphStats;
+}
+
+export async function fetchGraph(): Promise<GraphResponse> {
+  const res = await api.get<GraphResponse>('/graph');
   return res.data;
 }

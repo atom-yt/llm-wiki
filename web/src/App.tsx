@@ -7,7 +7,7 @@ import {
   ImportOutlined,
   SearchOutlined,
   SafetyCertificateOutlined,
-  PlayCircleOutlined,
+  NodeIndexOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import zhCN from 'antd/locale/zh_CN'
@@ -15,10 +15,11 @@ import enUS from 'antd/locale/en_US'
 import Dashboard from './pages/Dashboard'
 import WikiBrowser from './pages/WikiBrowser'
 import IngestPage from './pages/IngestPage'
-import IngestInteractivePage from './pages/IngestInteractivePage'
 import QueryPage from './pages/QueryPage'
 import LintPage from './pages/LintPage'
+import GraphPage from './pages/GraphPage'
 import LanguageSelector from './components/LanguageSelector'
+import HelpManual from './components/HelpManual'
 
 const { Sider, Content, Header } = Layout
 const { Title } = Typography
@@ -33,8 +34,8 @@ function AppContent() {
   const menuItems = [
     { key: '/', icon: <DashboardOutlined />, label: t('nav.dashboard') },
     { key: '/wiki', icon: <BookOutlined />, label: t('nav.wikiBrowser') },
+    { key: '/graph', icon: <NodeIndexOutlined />, label: t('nav.graph') },
     { key: '/ingest', icon: <ImportOutlined />, label: t('nav.ingest') },
-    { key: '/ingest-interactive', icon: <PlayCircleOutlined />, label: t('nav.ingestInteractive') },
     { key: '/query', icon: <SearchOutlined />, label: t('nav.query') },
     { key: '/lint', icon: <SafetyCertificateOutlined />, label: t('nav.healthCheck') },
   ]
@@ -92,7 +93,10 @@ function AppContent() {
           <Title level={4} style={{ margin: 0, fontWeight: 600 }}>
             {menuItems.find(i => i.key === selectedKey)?.label || t('app.title')}
           </Title>
-          <LanguageSelector />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <HelpManual />
+            <LanguageSelector />
+          </div>
         </Header>
         <Content style={{ margin: 20 }}>
           <div style={{
@@ -106,8 +110,8 @@ function AppContent() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/wiki" element={<WikiBrowser />} />
               <Route path="/wiki/:pageName" element={<WikiBrowser />} />
+              <Route path="/graph" element={<GraphPage />} />
               <Route path="/ingest" element={<IngestPage />} />
-              <Route path="/ingest-interactive" element={<IngestInteractivePage />} />
               <Route path="/query" element={<QueryPage />} />
               <Route path="/lint" element={<LintPage />} />
             </Routes>
